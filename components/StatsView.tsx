@@ -1,9 +1,10 @@
 
-import React, { useMemo, useRef, useState } from 'react';
+
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { WellData } from '../types';
 import { groupWellsByName, performTTest, performANOVA } from '../utils/statsUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ErrorBar, Cell } from 'recharts';
-import { FlaskConical, Download, Camera, SlidersHorizontal, BookOpen, X } from 'lucide-react';
+import { FlaskConical, Download, Camera, SlidersHorizontal, BookOpen, X, ArrowUp, ArrowDown, ArrowLeftRight } from 'lucide-react';
 import html2canvas from 'html2canvas';
 
 interface Props {
@@ -16,6 +17,8 @@ const StatsView: React.FC<Props> = ({ selectedWells }) => {
   const chartRef = useRef<HTMLDivElement>(null);
   const [selectedMetric, setSelectedMetric] = useState<MetricType>('doublingTimeMin');
   const [showMethods, setShowMethods] = useState(false);
+  const [showReorder, setShowReorder] = useState(false);
+  const [customOrder, setCustomOrder] = useState<string[]>([]);
   
   const metricOptions: { value: MetricType; label: string }[] = [
     { value: 'doublingTimeMin', label: 'DT Interval' },
@@ -24,39 +27,74 @@ const StatsView: React.FC<Props> = ({ selectedWells }) => {
   ];
 
   const { groups, statsResult } = useMemo(() => {
-    // Pass the selected metric to the grouping function
+    // 1. Group Data
     const rawGroups = groupWellsByName(selectedWells, selectedMetric);
     
-    // Sorting logic to prioritize Controls/WT
-    // Priority names: control, wildtype, wild-type, wt, by4741, by, by4742
+    // 2. Define Default Sort (Control First, then Alpha)
     const controlKeywords = ['control', 'wildtype', 'wild-type', 'wt', 'by4741', 'by', 'by4742'];
-    
     const isControl = (name: string) => {
         const n = name.toLowerCase().trim();
         return controlKeywords.some(k => n === k || n.startsWith(k + ' ') || n.startsWith(k + '_') || n.startsWith(k + '-'));
     };
 
-    const sortedGroups = [...rawGroups].sort((a, b) => {
+    const defaultSorted = [...rawGroups].sort((a, b) => {
         const aCtrl = isControl(a.name);
         const bCtrl = isControl(b.name);
-        
-        // Control comes first
         if (aCtrl && !bCtrl) return -1;
         if (!aCtrl && bCtrl) return 1;
-        
-        // Otherwise alphabetical
         return a.name.localeCompare(b.name);
     });
 
-    let res = null;
-    if (sortedGroups.length === 2) {
-      res = performTTest(sortedGroups[0], sortedGroups[1]);
-    } else if (sortedGroups.length > 2) {
-      res = performANOVA(sortedGroups);
+    // 3. Apply Custom Order
+    // If we have a custom order, we use it to rank the groups.
+    // Any group NOT in the custom order is appended at the end (in default sort order).
+    let finalGroups = defaultSorted;
+
+    if (customOrder.length > 0) {
+        // Create a map for O(1) lookup of rank
+        const rankMap = new Map(customOrder.map((name, index) => [name, index] as [string, number]));
+        
+        finalGroups = [...defaultSorted].sort((a, b) => {
+            const rankA = rankMap.has(a.name) ? rankMap.get(a.name)! : Number.MAX_SAFE_INTEGER;
+            const rankB = rankMap.has(b.name) ? rankMap.get(b.name)! : Number.MAX_SAFE_INTEGER;
+            
+            if (rankA !== rankB) {
+                return rankA - rankB;
+            }
+            // If both undefined in custom order (max int), fall back to original default sort logic (Control/Alpha)
+            // Since we started with defaultSorted, they are already relatively sorted correctly.
+            // But strict sort function needs explicit tie breaker if we want to be safe
+            return 0; 
+        });
     }
 
-    return { groups: sortedGroups, statsResult: res };
-  }, [selectedWells, selectedMetric]);
+    // 4. Run Stats
+    let res = null;
+    if (finalGroups.length === 2) {
+      res = performTTest(finalGroups[0], finalGroups[1]);
+    } else if (finalGroups.length > 2) {
+      res = performANOVA(finalGroups);
+    }
+
+    return { groups: finalGroups, statsResult: res };
+  }, [selectedWells, selectedMetric, customOrder]);
+
+  // Sync customOrder with available groups if needed (optional, mostly to clean up old keys)
+  // We won't strictly delete keys to remember user pref if they temporarily unselect a well
+  
+  const moveGroup = (index: number, direction: 'up' | 'down') => {
+      // We work on the current visible list of groups to be intuitive
+      const currentNames = groups.map(g => g.name);
+      if (index < 0 || index >= currentNames.length) return;
+      
+      const newOrder = [...currentNames];
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      
+      if (targetIndex >= 0 && targetIndex < newOrder.length) {
+          [newOrder[index], newOrder[targetIndex]] = [newOrder[targetIndex], newOrder[index]];
+          setCustomOrder(newOrder);
+      }
+  };
 
   const exportChart = async () => {
     if (chartRef.current) {
@@ -152,8 +190,8 @@ const StatsView: React.FC<Props> = ({ selectedWells }) => {
   return (
     <div className="space-y-6">
       
-      {/* Metric Selector */}
-      <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 flex items-center gap-4">
+      {/* Metric Selector & Controls */}
+      <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2 text-slate-700 font-medium">
             <SlidersHorizontal size={18} />
             <span>Analysis Metric:</span>
@@ -167,9 +205,14 @@ const StatsView: React.FC<Props> = ({ selectedWells }) => {
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
         </select>
-        <div className="text-xs text-slate-500 ml-auto hidden sm:block">
-            Calculations and chart will update based on this selection.
-        </div>
+        
+        <button
+            onClick={() => setShowReorder(true)}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors"
+        >
+            <ArrowLeftRight size={14} />
+            Reorder Bars
+        </button>
       </div>
 
       <div className="flex flex-col gap-6">
@@ -322,6 +365,56 @@ const StatsView: React.FC<Props> = ({ selectedWells }) => {
         </div>
 
       </div>
+
+      {/* Reorder Modal */}
+      {showReorder && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full max-h-[80vh] flex flex-col">
+                <div className="flex justify-between items-center p-4 border-b border-slate-100">
+                    <h3 className="text-md font-bold text-slate-900">Reorder Groups</h3>
+                    <button onClick={() => setShowReorder(false)} className="text-slate-400 hover:text-slate-600">
+                        <X size={20} />
+                    </button>
+                </div>
+                <div className="p-2 overflow-y-auto flex-1">
+                    <p className="text-xs text-slate-500 mb-2 px-2">Use arrows to move groups left/right on the chart.</p>
+                    <div className="space-y-1">
+                        {groups.map((g, idx) => (
+                            <div key={g.name} className="flex items-center justify-between p-2 hover:bg-slate-50 rounded border border-transparent hover:border-slate-100">
+                                <span className="text-sm font-medium text-slate-700 truncate max-w-[200px]" title={g.name}>
+                                    {g.name}
+                                </span>
+                                <div className="flex gap-1">
+                                    <button 
+                                        onClick={() => moveGroup(idx, 'up')}
+                                        disabled={idx === 0}
+                                        className="p-1 text-slate-400 hover:text-science-600 disabled:opacity-30 disabled:hover:text-slate-400"
+                                    >
+                                        <ArrowUp size={16} />
+                                    </button>
+                                    <button 
+                                        onClick={() => moveGroup(idx, 'down')}
+                                        disabled={idx === groups.length - 1}
+                                        className="p-1 text-slate-400 hover:text-science-600 disabled:opacity-30 disabled:hover:text-slate-400"
+                                    >
+                                        <ArrowDown size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+                    <button 
+                        onClick={() => setShowReorder(false)}
+                        className="px-4 py-2 bg-science-600 hover:bg-science-700 text-white rounded font-medium text-sm transition-colors"
+                    >
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Methodology Modal */}
       {showMethods && (
