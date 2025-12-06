@@ -172,10 +172,10 @@ const StatsView: React.FC<Props> = ({ selectedWells }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="flex flex-col gap-6">
         
         {/* Chart Section */}
-        <div className="lg:col-span-2 bg-white p-4 rounded-lg shadow-sm border border-slate-200 min-h-[400px]">
+        <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 min-h-[400px]">
           <div className="flex justify-between items-center mb-4">
              <div>
                 <h3 className="text-lg font-semibold text-slate-800">Doubling Time Comparison</h3>

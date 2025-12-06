@@ -32,6 +32,7 @@ const App: React.FC = () => {
   const [results, setResults] = useState<WellData[]>([]);
   const [selectedWell, setSelectedWell] = useState<WellData | null>(null);
   const [selectedStatsWells, setSelectedStatsWells] = useState<Set<string>>(new Set());
+  const [autoGroupingEnabled, setAutoGroupingEnabled] = useState(false);
 
   // File Upload Handler
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -52,90 +53,34 @@ const App: React.FC = () => {
     }
   };
 
-  // Helper to map 8x12 (or 16x24) grid to well labels
-  const applyLayoutNames = useCallback((currentResults: WellData[], layoutText: string): WellData[] => {
-      if (!layoutText.trim()) return currentResults;
-
-      const lines = layoutText.split(/\r\n|\n|\r/).filter(line => line.trim().length > 0);
-      const nameMap = new Map<string, string>();
-      const rowLabels = "ABCDEFGHIJKLMNOP".split(''); // Support up to 384 well (P)
-
-      lines.forEach((line, rIdx) => {
-          if (rIdx >= rowLabels.length) return;
-          
-          const cells = line.split('\t');
-          cells.forEach((cell, cIdx) => {
-              if (cIdx >= 24) return; // Support up to 384 well (24 cols)
-              
-              const label = `${rowLabels[rIdx]}${cIdx + 1}`;
-              const cleanName = cell.trim();
-              if (cleanName) {
-                  nameMap.set(label, cleanName);
-              }
-          });
-      });
-
-      return currentResults.map(well => ({
-          ...well,
-          name: nameMap.get(well.label)
-      }));
-  }, []);
-
-  const handleApplyLayout = () => {
-      if (results.length === 0) return;
-      const updatedResults = applyLayoutNames(results, layoutInput);
-      setResults(updatedResults);
-      
-      // Update selected well if it exists
-      if (selectedWell) {
-          const updatedSelected = updatedResults.find(w => w.label === selectedWell.label);
-          if (updatedSelected) setSelectedWell(updatedSelected);
-      }
-  };
-
-  const handleToggleStatsWell = (label: string) => {
-    setSelectedStatsWells(prev => {
-        const next = new Set(prev);
-        if (next.has(label)) {
-            next.delete(label);
-        } else {
-            next.add(label);
-        }
-        return next;
-    });
-  };
-
-  // Processing Handler
-  const handleProcess = useCallback(async () => {
-    if (!file) return;
-    
+  // Core Processing Logic
+  const processData = useCallback((fileToProcess: File, configToUse: ProcessingConfig, layoutToUse: string) => {
     setIsProcessing(true);
     setError(null);
 
     const reader = new FileReader();
-    const isBinary = file.name.toLowerCase().endsWith('.xls') || file.name.toLowerCase().endsWith('.xlsx');
+    const isBinary = fileToProcess.name.toLowerCase().endsWith('.xls') || fileToProcess.name.toLowerCase().endsWith('.xlsx');
 
     reader.onload = (event) => {
       try {
         const result = event.target?.result;
         if (!result) throw new Error("File is empty");
 
-        let processedData = processFileContent(
+        const processedData = processFileContent(
           result as string | ArrayBuffer, 
-          config, 
+          configToUse, 
           isBinary ? 'binary' : 'text',
-          layoutInput // Pass layoutInput directly for blank detection
+          layoutToUse 
         );
         
-        // Also ensure names are applied (redundant but safe if processFileContent didn't get names)
-        if (layoutInput.trim()) {
-            processedData = applyLayoutNames(processedData, layoutInput);
-        }
-        
         setResults(processedData);
-        if (processedData.length > 0) {
-          setSelectedWell(processedData[0]);
-        }
+        
+        // Preserve selection if possible
+        setSelectedWell(prev => {
+            if (!prev) return processedData.length > 0 ? processedData[0] : null;
+            return processedData.find(w => w.label === prev.label) || processedData[0] || null;
+        });
+
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error parsing file");
       } finally {
@@ -149,11 +94,92 @@ const App: React.FC = () => {
     };
 
     if (isBinary) {
-      reader.readAsArrayBuffer(file);
+      reader.readAsArrayBuffer(fileToProcess);
     } else {
-      reader.readAsText(file);
+      reader.readAsText(fileToProcess);
     }
-  }, [file, config, layoutInput, applyLayoutNames]);
+  }, []);
+
+  // Button Click Handler for Manual Process/Recalculate
+  const handleProcessClick = () => {
+    if (file) {
+      processData(file, config, layoutInput);
+    }
+  };
+
+  const handleApplyLayout = () => {
+      // 1. Parse layout to find 'blank' wells to auto-populate config
+      const lines = layoutInput.split(/\r\n|\n|\r/).filter(line => line.trim().length > 0);
+      const rowLabels = "ABCDEFGHIJKLMNOP".split('');
+      const blankLabels: string[] = [];
+      
+      lines.forEach((line, rIdx) => {
+          if (rIdx >= rowLabels.length) return;
+          const cells = line.split('\t');
+          cells.forEach((cell, cIdx) => {
+               if (cIdx >= 24) return;
+               const cleanName = cell.trim().toLowerCase();
+               if (cleanName === 'blank') {
+                   blankLabels.push(`${rowLabels[rIdx]}${cIdx + 1}`);
+               }
+          });
+      });
+
+      // 2. Update config if blanks found
+      let nextConfig = { ...config };
+      if (blankLabels.length > 0) {
+          const newBlanks = blankLabels.join(', ');
+          nextConfig = { ...nextConfig, blankWells: newBlanks };
+          setConfig(nextConfig);
+      }
+
+      // 3. Trigger Recalculation Automatically with new config and names
+      if (file) {
+          processData(file, nextConfig, layoutInput);
+      }
+  };
+
+  const handleToggleStatsWell = useCallback((label: string) => {
+    const well = results.find(w => w.label === label);
+    if (!well) return;
+
+    // Determine target labels (just this one, or all with same name)
+    const targetLabels = new Set<string>();
+    targetLabels.add(label);
+
+    if (autoGroupingEnabled && well.name && well.name.trim() !== '') {
+         results.forEach(w => {
+            if (w.name === well.name) {
+                targetLabels.add(w.label);
+            }
+        });
+    }
+
+    setSelectedStatsWells(prev => {
+        const next = new Set(prev);
+        // Determine action based on the state of the specific well clicked
+        // If it's selected, we deselect all targets. If not, we select all targets.
+        const willSelect = !next.has(label);
+
+        targetLabels.forEach(l => {
+            if (willSelect) {
+                next.add(l);
+            } else {
+                next.delete(l);
+            }
+        });
+        return next;
+    });
+  }, [results, autoGroupingEnabled]);
+
+  const handleToggleAllStats = useCallback((selectAll: boolean) => {
+    if (selectAll) {
+        const allLabels = new Set(results.map(r => r.label));
+        setSelectedStatsWells(allLabels);
+    } else {
+        setSelectedStatsWells(new Set());
+    }
+  }, [results]);
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-12">
@@ -281,7 +307,7 @@ const App: React.FC = () => {
                 </div>
 
                 <button
-                  onClick={handleProcess}
+                  onClick={handleProcessClick}
                   disabled={!file || isProcessing}
                   className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white 
                     ${!file || isProcessing ? 'bg-slate-300 cursor-not-allowed' : 'bg-science-600 hover:bg-science-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-science-500'}
@@ -337,11 +363,11 @@ const App: React.FC = () => {
                     <p className="font-semibold">Calculation Modes</p>
                 </div>
                 <div className="text-xs space-y-2 pl-7">
-                    <p>
-                        <strong>DT Interval (Avg):</strong> Uses linear regression on all log-transformed OD points falling within the Lower/Upper OD limits.
-                    </p>
                     <p className="pt-0 text-slate-500 font-mono text-[10px]">
                         Formula: DT = ln(2) / slope
+                    </p>
+                    <p>
+                        <strong>DT Interval (Avg):</strong> Uses linear regression on all log-transformed OD points falling within the Lower/Upper OD limits.
                     </p>
                     <p>
                         <strong>DT Inflection (Max Rate):</strong> Finds the steepest slope (fastest growth) within the OD limits using a sliding window. This represents the max doubling rate.
@@ -413,6 +439,9 @@ const App: React.FC = () => {
                             selectedWellLabel={selectedWell?.label}
                             selectedStatsWells={selectedStatsWells}
                             onToggleStatsWell={handleToggleStatsWell}
+                            onToggleAllStats={handleToggleAllStats}
+                            autoGroupingEnabled={autoGroupingEnabled}
+                            onToggleAutoGrouping={setAutoGroupingEnabled}
                         />
                     </div>
                 </>
@@ -446,6 +475,9 @@ const App: React.FC = () => {
                             selectedWellLabel={selectedWell?.label}
                             selectedStatsWells={selectedStatsWells}
                             onToggleStatsWell={handleToggleStatsWell}
+                            onToggleAllStats={handleToggleAllStats}
+                            autoGroupingEnabled={autoGroupingEnabled}
+                            onToggleAutoGrouping={setAutoGroupingEnabled}
                         />
                     </div>
                 </div>

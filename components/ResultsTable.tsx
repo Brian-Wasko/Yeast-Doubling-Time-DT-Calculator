@@ -9,6 +9,9 @@ interface Props {
   selectedWellLabel?: string;
   selectedStatsWells: Set<string>;
   onToggleStatsWell: (label: string) => void;
+  onToggleAllStats?: (selectAll: boolean) => void;
+  autoGroupingEnabled?: boolean;
+  onToggleAutoGrouping?: (enabled: boolean) => void;
 }
 
 const ResultsTable: React.FC<Props> = ({ 
@@ -16,7 +19,10 @@ const ResultsTable: React.FC<Props> = ({
     onSelectWell, 
     selectedWellLabel,
     selectedStatsWells,
-    onToggleStatsWell
+    onToggleStatsWell,
+    onToggleAllStats,
+    autoGroupingEnabled = false,
+    onToggleAutoGrouping
 }) => {
   
   const downloadCSV = () => {
@@ -67,17 +73,43 @@ const ResultsTable: React.FC<Props> = ({
     onToggleStatsWell(label);
   };
 
+  const allSelected = data.length > 0 && selectedStatsWells.size === data.length;
+
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200 flex flex-col h-full max-h-[600px]">
       <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-lg">
         <h2 className="text-lg font-semibold text-slate-800">Results ({data.length})</h2>
-        <button 
-          onClick={downloadCSV}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-science-600 hover:bg-science-700 rounded transition-colors"
-        >
-          <Download size={16} />
-          Export CSV
-        </button>
+        <div className="flex items-center gap-4">
+            {onToggleAllStats && (
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer select-none">
+                    <input 
+                        type="checkbox" 
+                        checked={allSelected} 
+                        onChange={(e) => onToggleAllStats(e.target.checked)}
+                        className="rounded border-slate-300 text-science-600 focus:ring-science-500 h-4 w-4"
+                    />
+                    Select All
+                </label>
+            )}
+            {onToggleAutoGrouping && (
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer select-none" title="Automatically select/deselect all wells with the same name">
+                    <input 
+                        type="checkbox" 
+                        checked={autoGroupingEnabled} 
+                        onChange={(e) => onToggleAutoGrouping(e.target.checked)}
+                        className="rounded border-slate-300 text-science-600 focus:ring-science-500 h-4 w-4"
+                    />
+                    Auto-select Group
+                </label>
+            )}
+            <button 
+            onClick={downloadCSV}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-science-600 hover:bg-science-700 rounded transition-colors"
+            >
+            <Download size={16} />
+            Export CSV
+            </button>
+        </div>
       </div>
       
       <div className="overflow-auto flex-1 p-0">
