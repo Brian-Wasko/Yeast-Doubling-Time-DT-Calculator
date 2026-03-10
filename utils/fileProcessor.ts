@@ -1,3 +1,4 @@
+
 import { WellData, ProcessingConfig, ODDataPoint } from '../types';
 import { calculateRegression, calculateMaxSlopeRegression, isValidWell, sortWells, normalizeWellLabel } from './mathUtils';
 import { read, utils } from 'xlsx';
@@ -8,14 +9,15 @@ const parseLayout = (layoutText: string): Map<string, string> => {
   if (!layoutText) return nameMap;
 
   const lines = layoutText.split(/\r\n|\n|\r/).filter(line => line.trim().length > 0);
-  const rowLabels = "ABCDEFGHIJKLMNOP".split(''); // Support up to 384 well (P)
-
+  const rowLabels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(''); // Support up to 26 rows (A-Z)
+  
   lines.forEach((line, rIdx) => {
       if (rIdx >= rowLabels.length) return;
       
       const cells = line.split('\t');
       cells.forEach((cell, cIdx) => {
-          if (cIdx >= 24) return; // Support up to 384 well (24 cols)
+          // Support 384 well (24 cols) and beyond. 
+          if (cIdx >= 48) return; 
           
           const label = `${rowLabels[rIdx]}${cIdx + 1}`;
           const cleanName = cell.trim();
@@ -54,126 +56,90 @@ export const processFileContent = (
     });
   }
   
-  // 1. Auto-detect Header Row
-  let headerRowIndex = config.skipRows;
-  let bestRowIndex = -1;
-  let maxWellsFound = 0;
-
-  const scanLimit = Math.min(lines.length, 100);
-
-  for (let i = 0; i < scanLimit; i++) {
-    const row = lines[i];
-    if (!Array.isArray(row)) continue;
-
-    let wellCount = 0;
-    let hasTime = false;
-
-    for (const cell of row) {
-      if (cell === null || cell === undefined) continue;
-      const val = String(cell).trim();
-      if (isValidWell(val)) wellCount++;
-      if (val.toLowerCase() === 'time') hasTime = true;
-    }
-
-    if (hasTime && wellCount > 0) {
-      bestRowIndex = i;
-      break; 
-    }
-
-    if (wellCount > maxWellsFound) {
-      maxWellsFound = wellCount;
-      bestRowIndex = i;
-    }
-  }
-
-  if (bestRowIndex !== -1 && (maxWellsFound > 2 || (lines[bestRowIndex].some(c => String(c).toLowerCase() === 'time')))) {
-    headerRowIndex = bestRowIndex;
-  }
-
-  if (lines.length < headerRowIndex + 1) {
-    throw new Error(`File too short. Could not find header row (detected/configured at row ${headerRowIndex + 1}).`);
-  }
-  
-  const headers = lines[headerRowIndex].map(h => String(h).trim());
-  const dataRows = lines.slice(headerRowIndex + 1);
-
-  // 2. Identify Well Columns and Time Column
-  const wellIndices: number[] = [];
-  let timeColIndex = -1;
-
-  headers.forEach((h, idx) => {
-    if (h && isValidWell(h)) {
-      wellIndices.push(idx);
-    }
-    if (h && h.toLowerCase() === 'time') {
-      timeColIndex = idx;
-    }
-  });
-
-  if (wellIndices.length === 0) {
-    throw new Error(`No valid well labels (e.g., A1, B2) found in header row ${headerRowIndex + 1}.`);
-  }
-
-  // 3. Initialize Well Data Structures
+  // Initialize Well Data Structures
   const wellMap = new Map<string, number[]>();
-  wellIndices.forEach(idx => {
-    const label = headers[idx];
-    wellMap.set(label, []);
-  });
-
-  // 4. Parse Data Rows
-  let previousTime = -1;
   
-  for (const row of dataRows) {
-    if (!Array.isArray(row) || row.length === 0) continue;
-    
-    // Check for footer / end of block via Time column reset
-    if (timeColIndex !== -1 && timeColIndex < row.length) {
-      const timeValStr = String(row[timeColIndex]).trim();
-      
-      // Parse time to check for 0 reset
-      // Formats: 0:29:16 or just seconds/minutes number
-      let currentTimeVal = 0;
-      if (timeValStr.includes(':')) {
-         // rough parse
-         const parts = timeValStr.split(':').map(Number);
-         // not critical to get exact seconds here, just checking for reset relative order
-         currentTimeVal = parts[0] * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
-      } else {
-         currentTimeVal = parseFloat(timeValStr);
-      }
+  // State for block parsing
+  let activeColMap = new Map<number, string>(); // colIndex -> wellLabel
+  let activeTimeIndex = -1;
+  let headersFound = false;
 
-      // If we have established a timeline and suddenly it drops to 0, stop.
-      // We allow the first row to be 0 or small.
-      if (!isNaN(currentTimeVal)) {
-          if (previousTime > 0 && currentTimeVal === 0) {
-              break; // Stop processing, we hit the footer/next block
-          }
-          previousTime = currentTimeVal;
-      }
+  // Iterate through all lines starting from skipRows
+  // We scan the entire file to find multiple blocks of data (common in 384-well exports or extended runs)
+  const startRow = Math.max(0, config.skipRows);
+  
+  for (let i = startRow; i < lines.length; i++) {
+    const row = lines[i];
+    if (!Array.isArray(row) || row.length === 0) continue;
+
+    // Convert row to string array for robust checking
+    const strRow = row.map(c => c !== null && c !== undefined ? String(c).trim() : '');
+    
+    // Check if this is a Header Row
+    // Criteria: Contains "Time" (case insensitive) AND at least one valid well label (e.g. A1, B2)
+    // This allows us to detect the start of a new data block
+    const timeIndex = strRow.findIndex(s => s.toLowerCase() === 'time');
+    const hasWellLabel = strRow.some(s => isValidWell(s));
+
+    if (timeIndex !== -1 && hasWellLabel) {
+        // Start of a new block
+        activeColMap = new Map();
+        activeTimeIndex = timeIndex;
+        headersFound = true;
+        
+        strRow.forEach((cell, idx) => {
+            if (isValidWell(cell)) {
+                // Map the column index to the well label
+                activeColMap.set(idx, cell);
+                
+                // Initialize array if this is the first time we see this well
+                if (!wellMap.has(cell)) {
+                    wellMap.set(cell, []);
+                }
+            }
+        });
+        continue; // Move to next row (data)
     }
 
-    if (!row.some(cell => cell !== null && cell !== undefined && cell !== '')) continue;
-    
-    wellIndices.forEach(colIdx => {
-      if (colIdx >= row.length) return;
+    // Process Data Row if we are inside a valid block
+    if (activeColMap.size > 0 && activeTimeIndex !== -1) {
+        // Validate it's a data row by checking the Time column
+        const timeValStr = strRow[activeTimeIndex];
+        
+        // If Time column is empty or header-like, it's not data
+        if (!timeValStr || timeValStr.toLowerCase() === 'time') continue;
+        
+        // Note: We don't strictly parse the time value for x-axis (we use fixed interval), 
+        // but checking it helps ensure valid data rows.
+        // We accept it if it's not empty.
 
-      const label = headers[colIdx];
-      const val = row[colIdx];
-      
-      if (val !== undefined && val !== null && val !== '') {
-          const num = parseFloat(val as string);
-          if (!isNaN(num)) {
-            wellMap.get(label)?.push(num);
-          }
-      }
-    });
+        // Extract OD values for mapped columns
+        activeColMap.forEach((label, colIdx) => {
+            if (colIdx < row.length) {
+                const val = row[colIdx];
+                if (val !== undefined && val !== null && val !== '') {
+                    const num = parseFloat(val as string);
+                    if (!isNaN(num)) {
+                        wellMap.get(label)?.push(num);
+                    }
+                }
+            }
+        });
+    }
+  }
+
+  if (!headersFound) {
+      throw new Error(`Could not find any valid header row containing 'Time' and well labels (e.g. A1) after row ${startRow}. Check 'Skip Rows' setting.`);
+  }
+
+  if (wellMap.size === 0) {
+      throw new Error("Found headers but no valid data points extracted.");
   }
 
   // Parse layout for names
   const nameMap = layoutInput ? parseLayout(layoutInput) : new Map<string, string>();
 
-  // 5. Calculate Blank Curve (if applicable)
+  // Calculate Blank Curve (if applicable)
   let blankCurve: number[] = [];
   
   const rawBlanks = config.blankWells.split(',').map(s => s.trim()).filter(s => s.length > 0);
@@ -213,7 +179,7 @@ export const processFileContent = (
       }
   }
 
-  // 6. Calculate DT for each well
+  // Calculate DT for each well
   const results: WellData[] = [];
 
   wellMap.forEach((rawValues, label) => {
@@ -295,7 +261,7 @@ export const processFileContent = (
     });
   });
 
-  // 7. Sort results
+  // Sort results
   results.sort((a, b) => sortWells(a.label, b.label));
 
   return results;

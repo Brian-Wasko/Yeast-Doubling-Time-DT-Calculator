@@ -1,4 +1,5 @@
-import React from 'react';
+
+import React, { useMemo } from 'react';
 import { WellData } from '../types';
 
 interface Props {
@@ -18,53 +19,89 @@ const PlateOverview: React.FC<Props> = ({ results, onSelectWell, selectedWellLab
     );
   }
 
-  // Helper to get global max OD for consistent Y-axis scaling across all sparklines
+  // Calculate grid dimensions dynamically
+  const { rows, colCount, rowLabels } = useMemo(() => {
+    let maxCol = 12; // Default min 12
+    let maxRowIdx = 7; // Default min 8 rows (Index 7 is 'H')
+
+    // Find extent of data
+    results.forEach(w => {
+        const rowMatch = w.label.match(/^[A-Za-z]+/);
+        const colMatch = w.label.match(/\d+$/);
+        
+        if (rowMatch && colMatch) {
+            const rowChar = rowMatch[0].toUpperCase();
+            // Simple char code calc for single letters, adequate for plates < 26 rows
+            const rIdx = rowChar.charCodeAt(0) - 65; 
+            const cIdx = parseInt(colMatch[0]);
+
+            if (rIdx > maxRowIdx) maxRowIdx = rIdx;
+            if (cIdx > maxCol) maxCol = cIdx;
+        }
+    });
+
+    const finalColCount = maxCol;
+    
+    // Generate Row Labels (A, B, C...)
+    const finalRowLabels: string[] = [];
+    for(let i=0; i<=maxRowIdx; i++) {
+        finalRowLabels.push(String.fromCharCode(65 + i));
+    }
+
+    // Organize data into rows
+    const rowsMap: Record<string, WellData[]> = {};
+    finalRowLabels.forEach(r => { rowsMap[r] = [] });
+
+    results.forEach(w => {
+        const rowMatch = w.label.match(/^[A-Za-z]+/);
+        if (rowMatch) {
+            const r = rowMatch[0].toUpperCase();
+            if (rowsMap[r]) rowsMap[r].push(w);
+        }
+    });
+
+    // Sort wells within rows by column index
+    Object.values(rowsMap).forEach(list => {
+        list.sort((a, b) => {
+             const colA = parseInt(a.label.match(/\d+$/)?.[0] || '0');
+             const colB = parseInt(b.label.match(/\d+$/)?.[0] || '0');
+             return colA - colB;
+        });
+    });
+
+    return { rows: rowsMap, colCount: finalColCount, rowLabels: finalRowLabels };
+  }, [results]);
+
+
+  // Helper to get global max OD for consistent Y-axis scaling
   const allMaxOD = Math.max(...results.map(w => Math.max(...w.rawValues)));
   const yMax = allMaxOD > 0 ? allMaxOD * 1.1 : 1;
   
-  // Group wells by row (A, B, C...)
-  const rows: Record<string, WellData[]> = {};
-  // Initialize rows A-H for standard 96 well
-  ['A','B','C','D','E','F','G','H'].forEach(r => { rows[r] = [] });
-
-  // Distribute results
-  results.forEach(w => {
-      const rowChar = w.label.charAt(0).toUpperCase();
-      if (!rows[rowChar]) rows[rowChar] = [];
-      rows[rowChar].push(w);
-  });
-
-  // Sort columns 1-12
-  Object.keys(rows).forEach(key => {
-      rows[key].sort((a, b) => {
-          const colA = parseInt(a.label.substring(1));
-          const colB = parseInt(b.label.substring(1));
-          return colA - colB;
-      });
-  });
-
   return (
     <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 overflow-x-auto">
-      <div className="w-full">
+      <div className="min-w-fit">
         {/* Header Row (Column Numbers) */}
         <div className="flex mb-2">
             <div className="w-8 shrink-0"></div> {/* Row label spacer */}
-            {Array.from({ length: 12 }, (_, i) => i + 1).map(num => (
-                <div key={num} className="flex-1 text-center text-xs font-bold text-slate-500">
+            {Array.from({ length: colCount }, (_, i) => i + 1).map(num => (
+                <div key={num} className="flex-1 min-w-[32px] text-center text-xs font-bold text-slate-500">
                     {num}
                 </div>
             ))}
         </div>
 
         {/* Grid Rows */}
-        {Object.entries(rows).map(([rowLabel, wells]) => {
-            if (wells.length === 0) return null;
+        {rowLabels.map((rowLabel) => {
+            const wells = rows[rowLabel] || [];
             
-            // Create a sparse array for columns 1-12 in case some wells are missing
-            const cols = Array(12).fill(null);
+            // Create a sparse array for columns
+            const cols = Array(colCount).fill(null);
             wells.forEach(w => {
-                const colIdx = parseInt(w.label.substring(1)) - 1;
-                if (colIdx >= 0 && colIdx < 12) cols[colIdx] = w;
+                const colMatch = w.label.match(/\d+$/);
+                if (colMatch) {
+                    const colIdx = parseInt(colMatch[0]) - 1;
+                    if (colIdx >= 0 && colIdx < colCount) cols[colIdx] = w;
+                }
             });
 
             return (
@@ -76,7 +113,7 @@ const PlateOverview: React.FC<Props> = ({ results, onSelectWell, selectedWellLab
 
                     {/* Columns */}
                     {cols.map((well: WellData | null, idx) => (
-                        <div key={idx} className="flex-1 px-1 min-w-0">
+                        <div key={idx} className="flex-1 px-0.5 min-w-[32px]">
                             {well ? (
                                 <Sparkline 
                                     well={well} 
@@ -135,15 +172,15 @@ const Sparkline: React.FC<{
             `}
             title={`${well.label} ${well.name ? `- ${well.name}` : ''}\nDT: ${well.doublingTimeMin?.toFixed(1) ?? 'N/A'}`}
         >
-            <div className="absolute top-0.5 left-1 text-[10px] font-bold text-slate-500 group-hover:text-science-600">
+            <div className="absolute top-0.5 left-0.5 text-[8px] sm:text-[10px] font-bold text-slate-500 group-hover:text-science-600 leading-none">
                 {well.label}
             </div>
             
             {well.isHighInitialOD && (
-                 <div className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-red-500" title="High Initial OD" />
+                 <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-red-500" title="High Initial OD" />
             )}
 
-            <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full p-1" preserveAspectRatio="none">
+            <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full p-0.5" preserveAspectRatio="none">
                 {/* Reference Range Band */}
                 <rect 
                     x="0" 
@@ -159,7 +196,7 @@ const Sparkline: React.FC<{
                     points={points} 
                     fill="none" 
                     stroke={isSelected ? '#0284c7' : '#94a3b8'} 
-                    strokeWidth="3" 
+                    strokeWidth="4" 
                 />
             </svg>
         </div>

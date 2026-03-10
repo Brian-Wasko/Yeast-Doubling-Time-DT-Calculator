@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback } from 'react';
-import { Settings, Info, FlaskConical, AlertTriangle, Grid3X3, ArrowRight, LayoutGrid, Activity, BarChart2 } from 'lucide-react';
+import { Settings, Info, FlaskConical, AlertTriangle, Grid3X3, ArrowRight, LayoutGrid, Activity, BarChart2, BookOpen } from 'lucide-react';
 import { ProcessingConfig, WellData } from './types';
 import { processFileContent } from './utils/fileProcessor';
 import ResultsTable from './components/ResultsTable';
@@ -110,14 +110,14 @@ const App: React.FC = () => {
   const handleApplyLayout = () => {
       // 1. Parse layout to find 'blank' wells to auto-populate config
       const lines = layoutInput.split(/\r\n|\n|\r/).filter(line => line.trim().length > 0);
-      const rowLabels = "ABCDEFGHIJKLMNOP".split('');
+      const rowLabels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
       const blankLabels: string[] = [];
       
       lines.forEach((line, rIdx) => {
           if (rIdx >= rowLabels.length) return;
           const cells = line.split('\t');
           cells.forEach((cell, cIdx) => {
-               if (cIdx >= 24) return;
+               if (cIdx >= 24) return; // Support up to 24 columns for now (384 well)
                const cleanName = cell.trim().toLowerCase();
                if (cleanName === 'blank') {
                    blankLabels.push(`${rowLabels[rIdx]}${cIdx + 1}`);
@@ -194,8 +194,19 @@ const App: React.FC = () => {
               Yeast Doubling Time (DT) Calculator
             </h1>
           </div>
-          <div className="text-sm text-slate-500 hidden sm:block">
-            Biotech Epoch2 Platereader Compatible
+          <div className="flex items-center gap-4 hidden sm:flex">
+            <div className="text-sm text-slate-500">
+              Biotech Epoch2 Platereader Compatible
+            </div>
+            <a 
+              href="https://github.com/Brian-Wasko/Yeast-Doubling-Time-DT-Calculator#readme" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-sm font-medium text-science-600 hover:text-science-700 bg-science-50 hover:bg-science-100 px-3 py-1.5 rounded-md transition-colors border border-science-100"
+            >
+              <BookOpen size={16} />
+              Documentation
+            </a>
           </div>
         </div>
       </header>

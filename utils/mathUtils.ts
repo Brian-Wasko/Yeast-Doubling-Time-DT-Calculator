@@ -1,7 +1,9 @@
+
 import { ODDataPoint } from '../types';
 
-// Regex for A1, A 1, P24, etc.
-const WELL_PATTERN = /^[A-Pa-p]\s*\d{1,2}$/;
+// Regex for A1, A 1, P24, etc. 
+// Updated to support rows A-Z (and potentially double letters) and up to 3 digits for columns to robustly support 384 well plates.
+const WELL_PATTERN = /^[A-Za-z]{1,2}\s*\d{1,3}$/;
 
 /**
  * Calculates linear regression for doubling time over the entire provided dataset.
@@ -138,8 +140,11 @@ export const sortWells = (a: string, b: string): number => {
 
   if (rowA !== rowB) return rowA - rowB;
 
-  const colA = parseInt(cleanA.substring(1) || '0', 10);
-  const colB = parseInt(cleanB.substring(1) || '0', 10);
+  const colMatchA = cleanA.match(/\d+/);
+  const colMatchB = cleanB.match(/\d+/);
+  
+  const colA = colMatchA ? parseInt(colMatchA[0], 10) : 0;
+  const colB = colMatchB ? parseInt(colMatchB[0], 10) : 0;
 
   return colA - colB;
 };
