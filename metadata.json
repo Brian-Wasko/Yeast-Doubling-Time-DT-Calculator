@@ -1,0 +1,5 @@
+{
+  "name": "Yeast Doubling Time DT Calculator",
+  "description": "A specialized tool for calculating yeast doubling times from Biotech Epoch2 plate reader data, replicating the logic of standard laboratory Python scripts.",
+  "requestFramePermissions": []
+}
