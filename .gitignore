@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Custom AI Studio & App Additions ---
+
+# Security & API Keys 
+.env
+.env.*
+client_secret.json
+credentials.json
+
+# SQLite Database Files
+*.db
+*.sqlite
+*.sqlite3
+db.sqlite3
+db.sqlite3-journal
+
+# Streamlit Configuration
+.streamlit/secrets.toml
